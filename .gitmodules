@@ -1,0 +1,3 @@
+[submodule "DeepSpeed"]
+	path = DeepSpeed
+	url = git@github.com:kkkstra/DeepSpeed.git
