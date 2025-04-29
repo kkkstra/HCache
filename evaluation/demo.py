@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import deepspeed
+import DeepSpeed.deepspeed as deepspeed
 
 model_name = "/home/lyx/hcache/models/Llama-2-7b-hf"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -25,5 +25,5 @@ def generate(prompt: str, max_length: int = 128):
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 if __name__ == "__main__":
-    text = generate("深度学习中的 Llama 系列模型有什么特点？")
+    text = generate("你好")
     print(text)
