@@ -1,3 +1,3 @@
 export PYTHONPATH=$PWD:$PYTHONPATH
 
-python evaluation/serve.py
+python evaluation/bench.py

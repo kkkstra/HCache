@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import DeepSpeed.deepspeed as deepspeed
+import deepspeed
 
 model_name = "/home/lyx/hcache/models/Llama-2-7b-hf"
 tokenizer = AutoTokenizer.from_pretrained(model_name)

@@ -1,3 +1,6 @@
 [submodule "DeepSpeed"]
 	path = DeepSpeed
 	url = git@github.com:kkkstra/DeepSpeed.git
+[submodule "MII"]
+	path = MII
+	url = git@github.com:kkkstra/DeepSpeed-MII.git
