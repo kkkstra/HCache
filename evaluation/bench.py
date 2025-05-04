@@ -14,7 +14,14 @@ def setup():
 if __name__ == "__main__":
     client = setup()
     try:
-        response = client("你好！", max_new_tokens=512, ignore_eos=True)
+        prompt = "你好"
+        sid = "test"
+
+        response = client(prompt, sid=sid, max_new_tokens=128, ignore_eos=True, return_full_text=True)
+        print(f"{response=}")
+
+        prompt = response[0].generated_text
+        response = client(prompt, sid=sid, max_new_tokens=128, ignore_eos=True, return_full_text=True)
         print(f"{response=}")
     except Exception as e:
         print(f"Error: {e}")
