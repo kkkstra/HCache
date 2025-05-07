@@ -7,7 +7,7 @@ def setup():
         "/home/lyx/hcache/models/Llama-2-7b-hf",
         tensor_parallel=1,
         replica_num=1,
-        prefix_cache_strategy=PrefixCacheStrategy.KV_OFFLOAD,
+        prefix_cache_strategy=PrefixCacheStrategy.H_CACHE,
     )
 
 
