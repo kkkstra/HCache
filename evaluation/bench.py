@@ -8,6 +8,7 @@ def setup():
         tensor_parallel=1,
         replica_num=1,
         prefix_cache_strategy=PrefixCacheStrategy.H_CACHE,
+        prefix_cache_strategy_alt=PrefixCacheStrategy.RECOMP,
     )
 
 
@@ -17,12 +18,12 @@ if __name__ == "__main__":
         prompt = "你好"
         sid = "test"
 
-        response = client(prompt, sid=sid, max_new_tokens=128, ignore_eos=True, return_full_text=True)
-        print(f"{response=}")
+        response = client(prompt, sid=sid, max_new_tokens=1024, ignore_eos=True)
+        print(f"{response[0].prompt_length=} {response[0].generated_length=}")
 
-        prompt = response[0].generated_text
-        response = client(prompt, sid=sid, max_new_tokens=128, ignore_eos=True, return_full_text=True)
-        print(f"{response=}")
+        prompt += response[0].generated_text
+        response = client(prompt, sid=sid, max_new_tokens=1024, ignore_eos=True)
+        print(f"{response[0].prompt_length=} {response[0].generated_length=}")
     except Exception as e:
         print(f"Error: {e}")
     client.terminate_server()
