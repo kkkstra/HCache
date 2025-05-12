@@ -1,8 +1,10 @@
 import argparse
 import asyncio
 import json
+import random
 from typing import List
 from deepspeed.inference.v2.inference_utils import PrefixCacheStrategy
+import numpy as np
 from transformers import AutoTokenizer
 
 from mii.batching.data_classes import Response
@@ -81,6 +83,25 @@ def parse_args():
         default=4096,
         help="Maximum length of the tokens"
     )
+    parser.add_argument(
+        "--rps",
+        type=float,
+        default=1.0,
+        help="Requests per second"
+    )
+    parser.add_argument(
+        "--save-path",
+        type=str,
+        default="logs",
+        help="Path to save the results"
+    )
+    parser.add_argument(
+        "--log-prefix",
+        type=str,
+        default="",
+        help="Prefix for the log file"
+    )
+    
 
     return parser.parse_args()
 
@@ -118,7 +139,7 @@ def load_dataset(model_path: str, dataset_path: str, limit: int = 0) -> List[Ses
 async def generate(client, sid: str, prompt: str, max_new_tokens: int) -> Response:
     response = client(prompt, sid=sid, max_new_tokens=max_new_tokens, ignore_eos=True)
     response = response[0]
-    print(f"sid: {sid}, prompt_length: {response.prompt_length}, generated_length: {response.generated_length}")
+    print(f"sid: {sid}, prompt_length: {response.prompt_length}, generated_length: {response.generated_length}, ttft: {response.ttft}, tbt: {response.tbt}")
     return response
 
 async def replay_session(client, session: Session, max_length: int):
@@ -147,21 +168,49 @@ async def replay_session(client, session: Session, max_length: int):
     
     return responses
 
-async def benchmark(client, data: List[Session], max_length: int):
+async def benchmark(client, data: List[Session], max_length: int, rps: float = 1.0):
 
     # loop = asyncio.new_event_loop()
     # asyncio.set_event_loop(loop)
 
+    np.random.seed(0)
+
     tasks = []
     for session in data:
         tasks.append(asyncio.create_task(replay_session(client, session, max_length)))
-        await asyncio.sleep(10) # modify 
+        await asyncio.sleep(np.random.poisson(rps))
 
     responses = await asyncio.gather(*tasks)
 
+    all_responses = []
     for session_response in responses:
+        all_responses.extend(session_response)
         for response in session_response:
-            print(f"{response.prompt_length=} {response.generated_length=}")
+            print(f"prompt: {response.prompt=} response: {response.generated_length} ttft: {response.ttft} tbt: {response.tbt}")
+
+    return all_responses
+
+def report(result: List[Response], prefix: str, path: str, rps: float):
+    ttfts = []
+    tbts = []
+    for response in result:
+        ttfts.append(response.ttft)
+        tbts.append(response.tbt)
+
+    avg_ttft = np.mean(ttfts)
+    avg_tbt = np.mean(tbts)
+    p99_ttft = np.percentile(ttfts, 99)
+    p99_tbt = np.percentile(tbts, 99)
+    p50_ttft = np.percentile(ttfts, 50)
+    p50_tbt = np.percentile(tbts, 50)
+
+    print(f"avg_ttft: {avg_ttft} p50_ttft: {p50_ttft} p99_ttft: {p99_ttft}")
+    print(f"avg_tbt: {avg_tbt} p50_tbt: {p50_tbt} p99_tbt: {p99_tbt}")
+
+    # Save the response as json
+    with open(f"{path}/{prefix}_{rps}.json", "w") as f:
+        json.dump(result, f, default=lambda x: x.__dict__, indent=4)
+
 
 def main():
     args = parse_args()
@@ -174,11 +223,17 @@ def main():
     client = setup_mii(path=args.model_path)
 
     try:
-        asyncio.run(benchmark(client, data, max_length=args.max_length))
+        result = asyncio.run(benchmark(client, data, max_length=args.max_length, rps=args.rps))
     except Exception as e:
         print(f"Error: {e}")
 
+
     client.terminate_server()
+
+    report(result,
+           args.log_prefix,
+           args.save_path,
+           args.rps)
 
 if __name__ == "__main__":
     main()
