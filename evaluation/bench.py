@@ -31,6 +31,17 @@ class Session:
         self.sid = sid
         self.items = items
 
+class Result:
+    prompt_length: int
+    generated_length: int
+    ttft: float
+    tbt: float
+
+    def __init__(self, prompt_length: int, generated_length: int, ttft: float, tbt: float):
+        self.prompt_length = prompt_length
+        self.generated_length = generated_length
+        self.ttft = ttft
+        self.tbt = tbt
 
 def setup_mii(path: str):
     return mii.serve(
@@ -185,17 +196,25 @@ async def benchmark(client, data: List[Session], max_length: int, rps: float = 1
     all_responses = []
     for session_response in responses:
         all_responses.extend(session_response)
-        for response in session_response:
-            print(f"prompt: {response.prompt=} response: {response.generated_length} ttft: {response.ttft} tbt: {response.tbt}")
+        # for response in session_response:
+        #     print(f"prompt: {response.prompt_length=} response: {response.generated_length} ttft: {response.ttft} tbt: {response.tbt}")
 
     return all_responses
 
-def report(result: List[Response], prefix: str, path: str, rps: float):
+def report(responses: List[Response], prefix: str, path: str, rps: float):
     ttfts = []
     tbts = []
-    for response in result:
+    result: List[Result] = []
+
+    for response in responses:
         ttfts.append(response.ttft)
         tbts.append(response.tbt)
+        result.append(Result(
+            prompt_length=response.prompt_length,
+            generated_length=response.generated_length,
+            ttft=response.ttft,
+            tbt=response.tbt
+        ))
 
     avg_ttft = np.mean(ttfts)
     avg_tbt = np.mean(tbts)
@@ -223,14 +242,14 @@ def main():
     client = setup_mii(path=args.model_path)
 
     try:
-        result = asyncio.run(benchmark(client, data, max_length=args.max_length, rps=args.rps))
+        responses = asyncio.run(benchmark(client, data, max_length=args.max_length, rps=args.rps))
     except Exception as e:
         print(f"Error: {e}")
 
 
     client.terminate_server()
 
-    report(result,
+    report(responses,
            args.log_prefix,
            args.save_path,
            args.rps)
