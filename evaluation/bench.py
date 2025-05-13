@@ -1,3 +1,9 @@
+import sys   
+sys.setrecursionlimit(100000)
+
+import nest_asyncio
+nest_asyncio.apply()
+
 import argparse
 import asyncio
 import json
@@ -9,9 +15,6 @@ from transformers import AutoTokenizer
 
 from mii.batching.data_classes import Response
 import mii
-
-import nest_asyncio
-nest_asyncio.apply()
 
 class SessionItem:
     role: str
@@ -43,17 +46,28 @@ class Result:
         self.ttft = ttft
         self.tbt = tbt
 
-def setup_mii(path: str):
+def setup_mii(path: str, strategy: str, strategy_alt: str, hcache_layer: int):
+    def get_strategy(strategy: str):
+        if strategy == "recomp":
+            return PrefixCacheStrategy.RECOMP
+        elif strategy == "kv_offload":
+            return PrefixCacheStrategy.KV_OFFLOAD
+        elif strategy == "h_cache":
+            return PrefixCacheStrategy.H_CACHE
+        else:
+            raise ValueError(f"Unknown prefix cache strategy: {strategy}")
+        
     return mii.serve(
         path,
         tensor_parallel=1,
         replica_num=1,
-        prefix_cache_strategy=PrefixCacheStrategy.H_CACHE,
-        prefix_cache_strategy_alt=PrefixCacheStrategy.RECOMP,
+        prefix_cache_strategy=get_strategy(strategy),
+        prefix_cache_strategy_alt=get_strategy(strategy_alt),
+        h_cache_layer=hcache_layer,
     )
 
 
-def demo():
+def demo(client):
     try:
         prompt = "你好"
         sid = "test"
@@ -112,7 +126,26 @@ def parse_args():
         default="",
         help="Prefix for the log file"
     )
-    
+    parser.add_argument(
+        "--prefix-cache-strategy",
+        type=str,
+        default="recomp",
+        choices=["recomp", "kv_offload", "h_cache"],
+        help="Prefix cache strategy to use"
+    )
+    parser.add_argument(
+        "--prefix-cache-strategy-alt",
+        type=str,
+        default="h_cache",
+        choices=["recomp", "kv_offload", "h_cache"],
+        help="Alternative prefix cache strategy to use"
+    )
+    parser.add_argument(
+        "--hcache-layer",
+        type=int,
+        default=32,
+        help="Layer to use for hcache"
+    )
 
     return parser.parse_args()
 
@@ -147,8 +180,8 @@ def load_dataset(model_path: str, dataset_path: str, limit: int = 0) -> List[Ses
 
     return datas
 
-async def generate(client, sid: str, prompt: str, max_new_tokens: int) -> Response:
-    response = client(prompt, sid=sid, max_new_tokens=max_new_tokens, ignore_eos=True)
+async def generate(client, sid: str, prompt: str, prefix_length: int, max_new_tokens: int):
+    response = client(prompt, sid=sid, prefix_length=prefix_length, max_new_tokens=max_new_tokens, ignore_eos=True)
     response = response[0]
     print(f"sid: {sid}, prompt_length: {response.prompt_length}, generated_length: {response.generated_length}, ttft: {response.ttft}, tbt: {response.tbt}")
     return response
@@ -157,12 +190,11 @@ async def replay_session(client, session: Session, max_length: int):
     sid = session.sid
     items = session.items
 
-    print(f"replay session {sid}")
-
     total_length = 0
     responses = []
 
     prompt = ""
+    prefix_length = 0
     for i in range(0, len(items), 2):
         total_length += items[i].length + items[i+1].length
         if total_length > max_length:
@@ -171,23 +203,22 @@ async def replay_session(client, session: Session, max_length: int):
         prompt += items[i].value
         max_new_tokens = items[i+1].length
         
-        resp = await generate(client, sid, prompt, max_new_tokens)
+        resp = await generate(client, sid, prompt, prefix_length, max_new_tokens)
         responses.append(resp)
-        prompt += responses[-1].generated_text
+
+        prompt += resp.generated_text
+        prefix_length += resp.prompt_length + resp.generated_length
 
         await asyncio.sleep(30)
     
     return responses
 
 async def benchmark(client, data: List[Session], max_length: int, rps: float = 1.0):
-
-    # loop = asyncio.new_event_loop()
-    # asyncio.set_event_loop(loop)
-
     np.random.seed(0)
 
     tasks = []
-    for session in data:
+    for i, session in enumerate(data):
+        print(f"replay session {i} {session.sid}")
         tasks.append(asyncio.create_task(replay_session(client, session, max_length)))
         await asyncio.sleep(np.random.poisson(rps))
 
@@ -196,12 +227,10 @@ async def benchmark(client, data: List[Session], max_length: int, rps: float = 1
     all_responses = []
     for session_response in responses:
         all_responses.extend(session_response)
-        # for response in session_response:
-        #     print(f"prompt: {response.prompt_length=} response: {response.generated_length} ttft: {response.ttft} tbt: {response.tbt}")
 
     return all_responses
 
-def report(responses: List[Response], prefix: str, path: str, rps: float):
+def report(responses: List[Response], prefix: str, path: str, rps: float, limit: int):
     ttfts = []
     tbts = []
     result: List[Result] = []
@@ -223,11 +252,18 @@ def report(responses: List[Response], prefix: str, path: str, rps: float):
     p50_ttft = np.percentile(ttfts, 50)
     p50_tbt = np.percentile(tbts, 50)
 
-    print(f"avg_ttft: {avg_ttft} p50_ttft: {p50_ttft} p99_ttft: {p99_ttft}")
-    print(f"avg_tbt: {avg_tbt} p50_tbt: {p50_tbt} p99_tbt: {p99_tbt}")
+    print("******************** benchmark result ********************")
+    print(f"rps: {rps}")
+    print(f"avg_ttft: {avg_ttft*1000:.2f} ms, p50_ttft: {p50_ttft*1000:.2f} ms, p99_ttft: {p99_ttft*1000:.2f} ms")
+    print(f"avg_tbt: {avg_tbt*1000:.2f} ms, p50_tbt: {p50_tbt*1000:.2f} ms, p99_tbt: {p99_tbt*1000:.2f} ms")
+
+    with open(f"{path}/{prefix}_{limit}_{rps}.log", "w") as f:
+        f.write(f"rps: {rps}\n")
+        f.write(f"avg_ttft: {avg_ttft*1000:.2f} ms, p50_ttft: {p50_ttft*1000:.2f} ms, p99_ttft: {p99_ttft*1000:.2f} ms\n")
+        f.write(f"avg_tbt: {avg_tbt*1000:.2f} ms, p50_tbt: {p50_tbt*1000:.2f} ms, p99_tbt: {p99_tbt*1000:.2f} ms\n")
 
     # Save the response as json
-    with open(f"{path}/{prefix}_{rps}.json", "w") as f:
+    with open(f"{path}/{prefix}_{limit}_{rps}.json", "w") as f:
         json.dump(result, f, default=lambda x: x.__dict__, indent=4)
 
 
@@ -239,7 +275,12 @@ def main():
         dataset_path=args.dataset_path,
         limit=args.limit
     )
-    client = setup_mii(path=args.model_path)
+    client = setup_mii(
+        path=args.model_path,
+        strategy=args.prefix_cache_strategy,
+        strategy_alt=args.prefix_cache_strategy_alt,
+        hcache_layer=args.hcache_layer
+    )
 
     try:
         responses = asyncio.run(benchmark(client, data, max_length=args.max_length, rps=args.rps))
@@ -252,7 +293,8 @@ def main():
     report(responses,
            args.log_prefix,
            args.save_path,
-           args.rps)
+           args.rps,
+           args.limit)
 
 if __name__ == "__main__":
     main()
