@@ -1,9 +1,9 @@
 rps=1.0
-limit=30
+limit=1
 
 conf=h_cache
 alt_strategy=recomp
-hcache_layers=(27)
+hcache_layers=(26 27 28 29)
 
 for hcache_layer in ${hcache_layers[@]}; do
     python evaluation/bench.py \
